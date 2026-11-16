@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page">
+
+  <header class="hero">
+    <div class="hero-main">
+      <span class="eyebrow">项目 02 · 后端核心</span>
+      <h1>订单通知的幂等消费与乱序处理</h1>
+      <p>把同一条通知故意投两次、把到达顺序打乱，看系统怎么保证订单状态不乱、短信只发一条。</p>
+    </div>
+    <div class="backend">
+      <b>队列后端：{{ queue.label }}</b>
+      <small>{{ queue.note }}</small>
+    </div>
+  </header>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <section class="terms">
+    <div class="term">
+      <b>幂等</b><span class="en">idempotency</span>
+      <p>同一条通知来 100 次，效果和来 1 次一样。像电梯按钮，按两下不会上两层。靠全局唯一的 <span class="mono">event_id</span> 查重实现。</p>
+    </div>
+    <div class="term">
+      <b>乱序</b><span class="en">out-of-order</span>
+      <p>先发生的事反而后到，比如「发货」比「下单」先到。先把缺前置的事件暂存，等前置补齐再按业务序号重放。</p>
+    </div>
+    <div class="term">
+      <b>位图</b><span class="en">bitmask</span>
+      <p>用一个数字的二进制位记进度。<span class="mono">01011</span> 表示已完成、发货没到、支付和创建都到了，缺哪步一眼看得出。</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>投放事件 <span class="sub">每次点击都会真实走一遍完整链路</span></h2>
+    <div class="action-row">
+      <form method="post" action="{% url 'run_scenario' 'normal' %}">{% csrf_token %}
+        <button class="btn" type="submit">正常流程</button></form>
+      <form method="post" action="{% url 'run_scenario' 'duplicate' %}">{% csrf_token %}
+        <button class="btn" type="submit">重复投递</button></form>
+      <form method="post" action="{% url 'run_scenario' 'outoforder' %}">{% csrf_token %}
+        <button class="btn" type="submit">乱序投递</button></form>
+      <form method="post" action="{% url 'run_scenario' 'mixed' %}">{% csrf_token %}
+        <button class="btn btn-primary" type="submit">一键跑全部场景</button></form>
+      <form method="post" action="{% url 'run_scenario' 'reset' %}">{% csrf_token %}
+        <button class="btn btn-ghost" type="submit">清空重来</button></form>
+    </div>
+    <p class="hint">链路：投递 XADD → 认领 XREADGROUP → 幂等闸门 → 状态机判断 → 位图推进 + 发通知 → ACK。当前未确认消息 {{ stats.pending }} 条，累计消费尝试 {{ stats.attempts }} 次，其中被重复投递过的事件 {{ stats.redeliveries }} 条。</p>
+  </section>
+
+  <section class="stats">
+    <div class="stat hl"><div class="n">{{ stats.orders }}</div><div class="l">订单</div></div>
+    <div class="stat"><div class="n">{{ stats.events }}</div><div class="l">事件</div></div>
+    <div class="stat ok"><div class="n">{{ stats.applied }}</div><div class="l">生效</div></div>
+    <div class="stat dup"><div class="n">{{ stats.duplicate }}</div><div class="l">重复拦下</div></div>
+    <div class="stat warn"><div class="n">{{ stats.buffered }}</div><div class="l">目前暂存</div></div>
+    <div class="stat ok"><div class="n">{{ stats.notifications }}</div><div class="l">通知条数</div></div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <h2>订单状态位图 <span class="sub">状态只前进，绝不回退</span></h2>
+      {% if orders %}
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>订单号</th><th>当前阶段</th><th>已到达的阶段</th><th>位图</th><th>进度</th><th>版本</th></tr></thead>
+        <tbody>
+        {% for order in orders %}
+          <tr>
+            <td class="mono">{{ order.order_no }}</td>
+            <td><b>{{ order.current_stage }}</b></td>
+            <td>
+              <span class="flags">
+                {% for f in order.stage_flags %}
+                  <span class="flag{% if f.on %} on{% endif %}">{{ f.label }}</span>
+                {% endfor %}
+                {% if order.cancelled %}<span class="flag cancel">已取消</span>{% endif %}
+              </span>
+            </td>
+            <td class="mono">{{ order.mask_bin }}</td>
+            <td><div class="bar"><i style="width: {{ order.progress }}%"></i></div></td>
+            <td class="mono">{{ order.version }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+        <div class="empty">还没有订单，点上面的「一键跑全部场景」投放事件。</div>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>对外通知日志 <span class="sub">同一 event_id 只会出现一条</span></h2>
+      {% if notifications %}
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>事件ID</th><th>通知内容</th></tr></thead>
+        <tbody>
+        {% for note in notifications %}
+          <tr><td class="mono">{{ note.event_id|truncatechars:14 }}</td><td>{{ note.content }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+        <div class="empty">还没有发出通知。</div>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>消费时间线 <span class="sub">每次投递尝试都留痕，最近 40 条倒序</span></h2>
+    {% if records %}
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>事件 ID</th><th>类型</th><th>结果</th><th>位图变化</th><th>说明</th><th>重放</th></tr></thead>
+      <tbody>
+      {% for r in records %}
+        <tr>
+          <td class="mono">{{ r.event_id|truncatechars:16 }}</td>
+          <td>{{ r.source_event.get_event_type_display }}</td>
+          <td><span class="pill {{ r.css }}">{{ r.get_result_display }}</span></td>
+          <td class="mono">{{ r.mask_before_bin }} → {{ r.mask_after_bin }}</td>
+          <td>{{ r.detail }}</td>
+          <td>{% if r.replayed_count %}<span class="pill ok">重放 {{ r.replayed_count }} 条</span>{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <div class="empty">还没有消费记录。</div>
+    {% endif %}
+  </section>
+
+  {% if transitions %}
+  <section class="card">
+    <h2>状态变更流水 <span class="sub">每一次位图前进都留痕</span></h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>订单号</th><th>动作</th><th>变更前</th><th>变更后</th><th>备注</th></tr></thead>
+      <tbody>
+      {% for t in transitions %}
+        <tr>
+          <td class="mono">{{ t.order_no }}</td>
+          <td>{{ t.action }}</td>
+          <td class="mono">{{ t.from_bin }}</td>
+          <td class="mono">{{ t.to_bin }}</td>
+          <td>{{ t.note|default:"—" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2>一次消费走哪几步</h2>
+    <ol class="steps">
+      <li><b>投递</b><span>事件带上全局唯一 event_id 进入队列</span></li>
+      <li><b>认领</b><span>消费组取走消息，未 ACK 前属于 Pending</span></li>
+      <li><b>幂等闸门</b><span>抢写消费记录，抢不到就是重复消息</span></li>
+      <li><b>状态机判断</b><span>前置阶段没齐？暂存，不硬写也不丢</span></li>
+      <li><b>推进 + 重放</b><span>位图只前进，通知按 event_id 去重，补齐后重放暂存</span></li>
+      <li><b>确认 ACK</b><span>告诉队列这条处理完了，不再重投</span></li>
+    </ol>
+  </section>
+
+  <div class="foot">Django 5.2 · SQLite · 可选 Redis Stream · 事件表 + event_id 唯一索引 + 位图状态回滚</div>
+</div>
+{% endblock %}

@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单通知幂等消费 · 技术文档与博客</title>
+<style>
+  :root {
+    --bg: #f7f9fc; --surface: #ffffff; --ink: #172b4d; --muted: #5c6f8c;
+    --line: #e3ebf5; --brand: #1677ff; --brand-soft: #e8f3ff; --code-bg: #f4f7fb;
+    --radius: 14px; --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161d; --surface: #1a2029; --ink: #e6edf6; --muted: #9fb0c6;
+      --line: #2c3542; --brand: #6aa8ff; --brand-soft: #1c2c42; --code-bg: #141a22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 15px; line-height: 1.85; }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface);
+    border-bottom: 1px solid var(--line); padding: 14px 26px; display: flex;
+    align-items: center; gap: 22px; flex-wrap: wrap; }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+  .brand span { color: var(--brand); }
+  .tabs { display: flex; gap: 8px; }
+  .tab { border: 1px solid var(--line); background: transparent; color: var(--muted);
+    padding: 6px 16px; border-radius: 999px; cursor: pointer; font-size: 13.5px;
+    font-family: inherit; transition: .18s ease; }
+  .tab:hover { border-color: var(--brand); color: var(--brand); }
+  .tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .meta { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .layout { display: flex; gap: 28px; max-width: 1240px; margin: 0 auto; padding: 28px 26px 80px; }
+  .toc { width: 236px; flex: none; position: sticky; top: 78px; align-self: flex-start;
+    max-height: calc(100vh - 110px); overflow-y: auto; padding-right: 8px; }
+  .toc-title { font-size: 12px; color: var(--muted); letter-spacing: 1.2px;
+    text-transform: uppercase; margin: 0 0 10px 10px; font-weight: 700; }
+  .toc-link { display: block; padding: 5px 10px; border-radius: 8px; color: var(--muted);
+    font-size: 13px; line-height: 1.5; border-left: 2px solid transparent; }
+  .toc-link:hover { background: var(--brand-soft); color: var(--brand); text-decoration: none; }
+  .toc-link.active { color: var(--brand); border-left-color: var(--brand);
+    background: var(--brand-soft); font-weight: 600; }
+  .toc-group { display: none; }
+  .toc-group.active { display: block; }
+  main { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 40px 48px 64px; }
+  article { display: none; }
+  article.active { display: block; }
+  h1 { font-size: 27px; line-height: 1.4; margin: 0 0 18px; letter-spacing: -.3px; }
+  h2 { font-size: 21px; margin: 46px 0 16px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--line); scroll-margin-top: 90px; }
+  .anchor { display: block; height: 0; scroll-margin-top: 90px; }
+  h3 { font-size: 17px; margin: 30px 0 12px; }
+  h4 { font-size: 15px; margin: 22px 0 10px; color: var(--muted); }
+  p { margin: 12px 0; }
+  strong { color: var(--ink); font-weight: 700; }
+  ul, ol { padding-left: 24px; margin: 12px 0; }
+  li { margin: 5px 0; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 34px 0; }
+  blockquote { margin: 18px 0; padding: 12px 18px; background: var(--brand-soft);
+    border-left: 3px solid var(--brand); border-radius: 0 10px 10px 0; color: var(--ink); }
+  blockquote p { margin: 0; }
+  code { font-family: var(--mono); font-size: .9em; background: var(--code-bg);
+    padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 20px; overflow-x: auto; margin: 18px 0; line-height: 1.7; }
+  pre code { background: none; border: none; padding: 0; font-size: 12.5px; }
+  .table-wrap { overflow-x: auto; margin: 18px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 9px 13px; text-align: left;
+    vertical-align: top; line-height: 1.65; }
+  th { background: var(--brand-soft); font-weight: 700; white-space: nowrap; }
+  tbody tr:nth-child(even) { background: rgba(22, 119, 255, .035); }
+  .foot { text-align: center; color: var(--muted); font-size: 12.5px; padding: 0 26px 40px; }
+  @media (max-width: 900px) {
+    .layout { flex-direction: column; padding: 18px 14px 60px; gap: 14px; }
+    .toc { position: static; width: 100%; max-height: 190px; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--surface); padding: 12px; }
+    main { padding: 24px 20px 44px; }
+    h1 { font-size: 22px; } h2 { font-size: 19px; }
+    .meta { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">订单通知 <span>·</span> 项目文档</div>
+  <div class="tabs">
+    <button class="tab active" data-doc="tech">技术文档</button>
+    <button class="tab" data-doc="blog">博客文章</button>
+  </div>
+  <div class="meta">v1.0 · 2026-11-16 · Django 5.2 · 19 tests</div>
+</div>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc-group active" data-group="tech"><a class="toc-link" href="#sec-1" data-target="sec-1">1. 项目概览</a>
+<a class="toc-link" href="#sec-2" data-target="sec-2">2. 第一层：从屏幕到服务器</a>
+<a class="toc-link" href="#sec-3" data-target="sec-3">3. 第二层：Django 收到请求之后</a>
+<a class="toc-link" href="#sec-4" data-target="sec-4">4. 第三层：目录与文件职责</a>
+<a class="toc-link" href="#sec-5" data-target="sec-5">5. 第四层：数据模型（6 张表）</a>
+<a class="toc-link" href="#sec-6" data-target="sec-6">6. 第五层：状态机与位图</a>
+<a class="toc-link" href="#sec-7" data-target="sec-7">7. 第六层：一次消费的完整链路</a>
+<a class="toc-link" href="#sec-8" data-target="sec-8">8. 双后端队列</a>
+<a class="toc-link" href="#sec-9" data-target="sec-9">9. 乱序处理：为什么是「暂存 + 重放」</a>
+<a class="toc-link" href="#sec-10" data-target="sec-10">10. 并发与事务</a>
+<a class="toc-link" href="#sec-11" data-target="sec-11">11. 验证</a>
+<a class="toc-link" href="#sec-12" data-target="sec-12">12. 运行方式与环境变量</a>
+<a class="toc-link" href="#sec-13" data-target="sec-13">13. 踩坑复盘（本轮真实发生）</a>
+<a class="toc-link" href="#sec-14" data-target="sec-14">14. 术语速查表</a>
+<a class="toc-link" href="#sec-15" data-target="sec-15">15. 后续演进</a>
+<a class="toc-link" href="#sec-16" data-target="sec-16">附录 A：最短的入门切口</a>
+<a class="toc-link" href="#sec-17" data-target="sec-17">附录 B：场景对照</a></div>
+    <div class="toc-group" data-group="blog"><a class="toc-link" href="#sec-1" data-target="sec-1">一、先说人话：电梯按钮</a>
+<a class="toc-link" href="#sec-2" data-target="sec-2">二、第一个念头：加个 if 不就行了？</a>
+<a class="toc-link" href="#sec-3" data-target="sec-3">三、乱序比重复麻烦，因为「丢」和「写」都不对</a>
+<a class="toc-link" href="#sec-4" data-target="sec-4">四、没有 Redis，怎么办？</a>
+<a class="toc-link" href="#sec-5" data-target="sec-5">五、把抽象的东西变成能看见的东西</a>
+<a class="toc-link" href="#sec-6" data-target="sec-6">六、怎么证明它真的对</a>
+<a class="toc-link" href="#sec-7" data-target="sec-7">七、还踩了几个小坑</a>
+<a class="toc-link" href="#sec-8" data-target="sec-8">八、做完之后</a></div>
+  </aside>
+  <main>
+    <article id="doc-tech" class="active"><h1>订单通知的幂等消费与乱序处理 · 技术文档</h1>
+<blockquote>版本：v1.0 · 2026-11-16<br>项目：<code>idempotent-order-notify</code><br>仓库：https://github.com/songxufeng-Seanfin/idempotent-order-notify<br>运行环境：Python 3.13.14 · Django 5.2.19 · SQLite 3 · 可选 Redis Stream<br>代码规模：26 个文件、约 1,840 行（含模板与测试）、6 张业务表、19 个自动化测试</blockquote>
+<p>这份文档按「由外向内」的顺序写：先讲页面上看得见的东西，再讲请求怎么走、Django 怎么调度，最后拆到数据、状态机、并发与队列。每个专业术语第一次出现都配一句白话解释，不需要预先学过消息队列也能读下来。</p>
+<hr>
+<span class="anchor" id="1-项目概览"></span>
+<h2 id="sec-1">1. 项目概览</h2>
+<h3>1.1 要解决什么问题</h3>
+<p>电商/交易系统里，订单状态变化通常以「通知」（也叫<strong>事件</strong>，Event：一件事发生后发出的一条消息）的形式在系统之间传递，例如「订单已支付」「包裹已发货」。真实环境有两条几乎必然发生的干扰：</p>
+<ul><li><strong>重复投递（at-least-once delivery，至少投递一次）</strong>：消息队列为了保证消息不丢，网络抖动、消费者超时、未确认都会让同一条消息再投一次。如果消费端不做防护，用户会收到两条短信、积分会被加两次。</li><li><strong>乱序到达（out-of-order）</strong>：多个生产者、多个分区、重试队列都会让「发货」比「下单」先到。如果收到什么就写什么，订单状态会跳步甚至回退。</li></ul>
+<p>本项目用一个可交互的演示系统，把这两类异常<strong>故意制造出来</strong>，再验证系统在三个层面都不出错：订单状态正确、对外通知不重复、状态绝不回退。</p>
+<h3>1.2 做了什么</h3>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>事件流水线</td><td>事件投递 → 队列认领 → 幂等闸门 → 状态机判断 → 状态推进 + 通知 → ACK 确认</td></tr><tr><td>幂等消费</td><td>全局唯一 <code>event_id</code> + 抢占式写入消费记录 + 副作用表唯一约束，三道防线</td></tr><tr><td>乱序处理</td><td>前置阶段位图校验；缺前置的事件<strong>暂存</strong>而不是丢弃；前置补齐后按业务序号<strong>重放</strong></td></tr><tr><td>状态机</td><td>5 个阶段用位图（bitmask）表示，只允许前进，禁止回退与非法跳转</td></tr><tr><td>双后端队列</td><td>默认用数据库表模拟 Stream；设置环境变量即切到真实 Redis Stream（XADD / XREADGROUP / XACK / XPENDING）</td></tr><tr><td>可视化看板</td><td>点按钮投放三种场景，实时展示订单位图、消费时间线、通知日志、状态流水</td></tr><tr><td>回归验证</td><td>19 个自动化测试覆盖幂等、乱序、拒绝、ACK、Redis 重投、页面交互</td></tr></tbody></table></div>
+<h3>1.3 技术栈（从外到内）</h3>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>技术</th><th>白话解释</th></tr></thead><tbody><tr><td>页面</td><td>HTML + CSS（内联样式，零 CDN 依赖）</td><td>页面骨架与长相；所有样式写在 <code>templates/base.html</code>，离线也能完整渲染</td></tr><tr><td>Web 框架</td><td>Django 5.2</td><td>别人盖好的楼：路由、表单防护、后台管理、数据库读写都自带，我们只填业务房间</td></tr><tr><td>语言</td><td>Python 3.13</td><td>写业务逻辑的语言</td></tr><tr><td>存储</td><td>SQLite</td><td>一个 <code>db.sqlite3</code> 文件装下全部 6 张表</td></tr><tr><td>队列（默认）</td><td>数据库模拟 Stream</td><td>用 <code>delivered / claimed_by / claimed_at</code> 三个字段还原投递-认领-确认语义</td></tr><tr><td>队列（可选）</td><td>Redis Stream + redis-py</td><td>真实消费组；<code>XADD</code> 投递、<code>XREADGROUP</code> 认领、<code>XACK</code> 确认、<code>XPENDING</code> 查未确认</td></tr><tr><td>测试</td><td>Django <code>TestCase</code></td><td>模拟一次请求/一次消费，断言结果对不对</td></tr></tbody></table></div>
+<hr>
+<span class="anchor" id="2-第一层从屏幕到服务器"></span>
+<h2 id="sec-2">2. 第一层：从屏幕到服务器</h2>
+<p>打开 <code>http://127.0.0.1:8000/</code>，看到的是一个<strong>演示控制台（Console）</strong>。它只有两类交互：</p>
+<ol><li><strong>GET <code>/</code></strong> — 渲染看板。视图 <code>notify/views.py :: console()</code> 查 6 个统计数字、最近 12 笔订单、最近 40 次消费尝试、最近 12 条通知、最近 20 条状态流水，交给 <code>templates/console.html</code> 排版。</li><li><strong>POST <code>/run/&lt;场景&gt;/</code></strong> — 点击按钮触发。<code>notify/views.py :: run_scenario_view()</code> 调 <code>consumer.run_scenario()</code> 真的跑一遍流水线，然后用 <strong>PRG（Post/Redirect/Get：提交后重定向，避免刷新重复提交）</strong> 跳回看板，顶部显示一行汇总。</li></ol>
+<p>这里可以复习一条对所有 Web 系统都成立的规律：<strong>页面不会自己变</strong>。每点一次按钮，浏览器发一次请求，服务器跑一圈，再把新结果送回来画成页面。</p>
+<p><code>405 Method Not Allowed</code>（路找到了但请求方式不对）在这里也有实例：<code>/run/reset/</code> 只允许 POST，用 GET 直接访问会被 <code>@require_POST</code> 装饰器拒掉，测试 <code>ConsoleTests.test_get_not_allowed</code> 专门验证了这一条。</p>
+<hr>
+<span class="anchor" id="3-第二层django-收到请求之后"></span>
+<h2 id="sec-3">3. 第二层：Django 收到请求之后</h2>
+<p>框架（Framework）和工具包的区别值得再记一次：<strong>工具是你叫它干活，框架是它来叫你</strong>。Django 定好流程，命中网址后回来调我们写的函数。</p>
+<p>一次请求依次经过：</p>
+<div class="table-wrap"><table><thead><tr><th>站</th><th>谁负责</th><th>干什么</th></tr></thead><tbody><tr><td>1</td><td>中间件（Middleware）</td><td>固定安检：Session、CSRF（表单防伪凭证）、消息框架</td></tr><tr><td>2</td><td>路由（URLconf）</td><td><code>config/urls.py</code> → <code>notify/urls.py</code>，把网址交给对应视图</td></tr><tr><td>3</td><td>视图（View）</td><td><code>console()</code> 或 <code>run_scenario_view()</code>，真正干活的一小段 Python</td></tr><tr><td>4</td><td>模型 / ORM</td><td><code>models.py</code> 定义表；ORM（把 Python 翻成数据库指令的翻译官）负责读写</td></tr><tr><td>5</td><td>模板（Template）</td><td>把数据排成 HTML</td></tr><tr><td>6</td><td>响应</td><td>浏览器画出页面；POST 场景则返回 302 重定向</td></tr></tbody></table></div>
+<p>本项目没有登录态，Session/CSRF 仍然保留：CSRF 保证那五个按钮只能从本站页面点出来，这和上一个项目里手机登录 403 是同一套机制。</p>
+<hr>
+<span class="anchor" id="4-第三层目录与文件职责"></span>
+<h2 id="sec-4">4. 第三层：目录与文件职责</h2>
+<pre><code>idempotent-order-notify/
+├── manage.py                         Django 命令行入口
+├── requirements.txt                  Django 5.2 + 可选 redis-py
+├── config/
+│   ├── settings.py                   配置：数据库、队列后端、环境变量开关
+│   ├── urls.py                       根路由（admin + notify）
+│   └── wsgi.py                       部署入口
+├── notify/                          业务应用
+│   ├── models.py                     6 张表（数据长什么样）
+│   ├── state_machine.py             位图与状态转移规则（纯函数，不碰数据库）
+│   ├── queue.py                     两种队列后端 + 工厂（数据从哪来）
+│   ├── consumer.py                  投递、消费、暂存重放、演示场景（数据怎么变）
+│   ├── views.py                     控制台视图（数据怎么摆）
+│   ├── urls.py                       &quot;/&quot; 与 &quot;/run/&lt;场景&gt;/&quot;
+│   ├── admin.py                     后台管理注册
+│   ├── tests.py                     19 个回归测试（含内存版 FakeRedis）
+│   ├── migrations/0001_initial.py    建表脚本
+│   └── management/commands/
+│       ├── demo_notify.py            一键跑演示场景（命令行版）
+│       └── consume_events.py        手动消费未 ACK 消息（worker 版）
+├── templates/
+│   ├── base.html                    全站外壳：设计系统、暗色适配、响应式
+│   └── console.html                 演示看板
+└── docs/                            本文档、博客、阅读版</code></pre>
+<p>一个刻意的设计：<strong>状态机与队列是解耦的</strong>。<code>state_machine.py</code> 是纯函数，不 import 任何模型；<code>queue.py</code> 只负责消息进出，不知道订单有几种状态。<code>consumer.py</code> 把两者粘起来。这样换队列（DB → Redis → Kafka）时，状态规则一行都不用改。</p>
+<hr>
+<span class="anchor" id="5-第四层数据模型6-张表"></span>
+<h2 id="sec-5">5. 第四层：数据模型（6 张表）</h2>
+<div class="table-wrap"><table><thead><tr><th>表</th><th>作用</th><th>关键约束</th></tr></thead><tbody><tr><td><code>Order</code></td><td>订单当前状态</td><td><code>order_no</code> 唯一；<code>state_mask</code> 位图；<code>version</code> 状态版本</td></tr><tr><td><code>NotifyEvent</code></td><td>事件表 / 队列消息</td><td><strong><code>event_id</code> 唯一</strong>（幂等的锚点）；<code>delivered</code>、<code>claimed_by</code>、<code>claimed_at</code> 模拟投递状态；<code>delivery_count</code> 记累计投递次数</td></tr><tr><td><code>ProcessedEvent</code></td><td>消费结果（幂等闸门）</td><td><code>event_id</code> 唯一 + <code>source_event</code> 一对一；<code>duplicate_hits</code> 记重复被拦次数</td></tr><tr><td><code>DeliveryAttempt</code></td><td>每一次消费尝试</td><td>无唯一约束，重复被拦也留一条；看板时间线的数据源</td></tr><tr><td><code>NotificationLog</code></td><td>对外通知（副作用）</td><td><strong><code>event_id</code> 唯一</strong>，保证同一事件最多发一条</td></tr><tr><td><code>StateTransition</code></td><td>状态变更流水</td><td>每次位图前进记一条 <code>from_mask → to_mask</code></td></tr></tbody></table></div>
+<h3>5.1 为什么需要两张「结果表」</h3>
+<p>这是本项目最容易混淆、也最值得记住的一点：</p>
+<ul><li><code>ProcessedEvent</code> <strong>一个 event_id 只有一条</strong>，它的存在本身就是「这条处理过了」的凭证，负责<strong>正确性</strong>。</li><li><code>DeliveryAttempt</code> <strong>来几次记几条</strong>，负责<strong>可观测性</strong>：重复投递被拦下、乱序暂存、重放了几条，都要看得见。</li></ul>
+<p>第一版只做了 <code>ProcessedEvent</code>，结果「重复拦下」在看板上永远是 0——被拦下的请求没有留痕。补上 <code>DeliveryAttempt</code> 之后，看板才能显示「1 次生效 + 3 次被拦」。这个坑记在本文第 13 章。</p>
+<h3>5.2 为什么唯一索引比 <code>if</code> 判断可靠</h3>
+<p>代码里「先查有没有、再插入」在并发下会失效：两个线程可能同时查到「没有」，然后都插入。数据库的 <strong>唯一索引（Unique Constraint）</strong> 由存储层保证，任何并发交错下都只会有一行成功。所以本项目把 <code>event_id</code> 唯一作为最后一道防线，代码里的判断只是为了让错误提示更友好。</p>
+<hr>
+<span class="anchor" id="6-第五层状态机与位图"></span>
+<h2 id="sec-6">6. 第五层：状态机与位图</h2>
+<h3>6.1 位图怎么表示进度</h3>
+<p>定义在 <code>state_machine.py :: STAGES</code>：</p>
+<div class="table-wrap"><table><thead><tr><th>阶段</th><th>事件类型</th><th>二进制位</th><th>十进制值</th><th>业务序号</th></tr></thead><tbody><tr><td>已创建</td><td><code>created</code></td><td>第 0 位</td><td>1</td><td>1</td></tr><tr><td>已支付</td><td><code>paid</code></td><td>第 1 位</td><td>2</td><td>2</td></tr><tr><td>已发货</td><td><code>shipped</code></td><td>第 2 位</td><td>4</td><td>3</td></tr><tr><td>已完成</td><td><code>completed</code></td><td>第 3 位</td><td>8</td><td>4</td></tr><tr><td>已取消</td><td><code>cancelled</code></td><td>第 4 位</td><td>16</td><td>—</td></tr></tbody></table></div>
+<p><code>Order.state_mask = 15</code> 即 <code>01111</code>：四个正常阶段全到了。若 <code>01011</code>，说明「已完成 + 已支付 + 已创建」到了，缺「已发货」——<strong>缺哪一步用一个整数直接算出来</strong>，不用存四个布尔字段、也不用查历史记录。</p>
+<h3>6.2 前置校验</h3>
+<p><code>required_before(event_type)</code> 返回「这件事发生之前必须已经点亮的所有位」：</p>
+<ul><li><code>created</code> → 0（不需要前置）</li><li><code>paid</code> → 1</li><li><code>shipped</code> → 3（1|2）</li><li><code>completed</code> → 7（1|2|4）</li></ul>
+<p><code>can_apply(event_type, mask)</code> 返回三元组 <code>(是否可推进, 原因, 是否属于乱序)</code>。关键分支：</p>
+<ul><li>该位已点亮 → <code>该阶段已到达（重复事件）</code>，<strong>拒绝</strong></li><li>前置位不齐 → <code>前置阶段未齐：已创建、已支付…</code> 并标记 <code>out_of_order=True</code>，<strong>暂存</strong></li><li>订单已完成还想取消 → <code>订单已完成，不允许取消</code>，<strong>拒绝</strong></li><li>合法 → <code>按序推进</code></li></ul>
+<p><code>next_mask()</code> 用 <code>mask | bit</code> 做按位或。<strong>或运算只能把 0 变 1，不能把 1 变 0</strong>，这就是「状态只前进、绝不回退」在数学上的保证，比在代码里写一堆 <code>if</code> 更可靠。</p>
+<hr>
+<span class="anchor" id="7-第六层一次消费的完整链路"></span>
+<h2 id="sec-7">7. 第六层：一次消费的完整链路</h2>
+<p>以「同一条 <code>paid</code> 消息被投了两次」为例，走 <code>notify/consumer.py</code>：</p>
+<div class="table-wrap"><table><thead><tr><th>步</th><th>函数</th><th>动作</th></tr></thead><tbody><tr><td>1</td><td><code>publish_event()</code></td><td><code>NotifyEvent.objects.get_or_create(event_id=...)</code>；重复投递不新建行，只累加 <code>delivery_count</code></td></tr><tr><td>2</td><td><code>queue.publish()</code></td><td>把 <code>event_id</code> 放进队列（DB 后端把 <code>delivered</code> 置回 False；Redis 后端 <code>XADD</code>）</td></tr><tr><td>3</td><td><code>consume_pending()</code></td><td><code>claim()</code> 认领一批 → 逐条 <code>consume_one()</code> → 逐条 <code>ack()</code></td></tr><tr><td>4</td><td><code>_consume_one_inner()</code></td><td><code>transaction.atomic()</code> 内锁订单行；抢写 <code>ProcessedEvent</code></td></tr><tr><td>5</td><td>幂等闸门</td><td><code>IntegrityError</code>（唯一约束冲突）→ 返回 <code>DUPLICATE</code>，累加 <code>duplicate_hits</code>，<strong>不产生任何副作用</strong></td></tr><tr><td>6</td><td><code>can_apply()</code></td><td>合法才 <code>next_mask()</code>；缺前置则写 <code>BUFFERED</code> 返回</td></tr><tr><td>7</td><td><code>_apply_stage()</code></td><td>更新位图与版本、<code>NotificationLog.get_or_create(event_id=...)</code>、<code>StateTransition.create(...)</code></td></tr><tr><td>8</td><td><code>_drain_buffer()</code></td><td>按业务序号扫描暂存的事件，能推进的全部重放，循环直到一轮没有新增</td></tr><tr><td>9</td><td><code>consume_one()</code> 包装层</td><td>无论结果如何，写一条 <code>DeliveryAttempt</code> 审计记录</td></tr><tr><td>10</td><td><code>queue.ack()</code></td><td>标记 <code>delivered=True</code> / <code>XACK</code>，队列不再重投</td></tr></tbody></table></div>
+<p><strong>副作用只发一次</strong>的根本原因不是「我们判断了重复」，而是 <code>NotificationLog.event_id</code> 有唯一约束：就算闸门被绕过，<code>get_or_create</code> 也不会插进第二条。</p>
+<hr>
+<span class="anchor" id="8-双后端队列"></span>
+<h2 id="sec-8">8. 双后端队列</h2>
+<p><code>queue.py</code> 定义统一契约，业务逻辑只依赖四个方法：</p>
+<pre><code>class EventQueue:
+    def publish(self, event_id): ...       # 投递
+    def claim(self, consumer, count): ...  # 认领（认领后未确认 = Pending）
+    def ack(self, event_id): ...           # 确认
+    def pending_count(self): ...           # 还有多少条没确认</code></pre>
+<div class="table-wrap"><table><thead><tr><th>语义</th><th><code>DatabaseQueue</code>（默认）</th><th><code>RedisStreamQueue</code>（可选）</th></tr></thead><tbody><tr><td>投递</td><td><code>delivered=False</code>，<code>delivery_count + 1</code></td><td><code>XADD stream * event_id &lt;id&gt;</code></td></tr><tr><td>认领</td><td>取 <code>delivered=False</code> 的前 N 条，写 <code>claimed_by/claimed_at</code></td><td><code>XREADGROUP GROUP g c STREAMS key 0</code>（先读 Pending）再读 <code>&gt;</code></td></tr><tr><td>确认</td><td><code>delivered=True</code></td><td><code>XACK stream group &lt;msg-id&gt;</code></td></tr><tr><td>未确认数</td><td><code>filter(delivered=False).count()</code></td><td><code>XPENDING</code> 返回 <code>pending</code></td></tr><tr><td>重投</td><td>重复 <code>publish</code> 把消息重新置为未确认</td><td>消费组未 ACK 的消息留在 Pending，换消费者重新读到</td></tr></tbody></table></div>
+<p><code>get_queue()</code> 读 <code>NOTIFY_BACKEND</code> 环境变量，值为 <code>redis</code> 时尝试连接并 <code>PING</code>；<strong>任何异常都自动回退到数据库队列</strong>并在看板上标注原因，保证没有 Redis 的机器上演示不会中断。</p>
+<p><code>tests.py :: FakeRedis</code> 是一个内存版 Redis，只实现这六个命令，让 Stream 路径在没装 Redis 的环境里也能被真实测试覆盖（包括「消费者崩溃不 ACK → 消息重投 → 幂等拦下」这条经典场景）。</p>
+<p>切换方式：</p>
+<pre><code># Windows (PowerShell)
+$env:NOTIFY_BACKEND=&quot;redis&quot;; $env:NOTIFY_REDIS_URL=&quot;redis://127.0.0.1:6379/0&quot;
+python manage.py demo_notify --scenario mixed</code></pre>
+<hr>
+<span class="anchor" id="9-乱序处理为什么是暂存--重放"></span>
+<h2 id="sec-9">9. 乱序处理：为什么是「暂存 + 重放」</h2>
+<p>面对乱序，常见三种做法：</p>
+<div class="table-wrap"><table><thead><tr><th>做法</th><th>问题</th></tr></thead><tbody><tr><td>收到就写</td><td>状态跳步，<code>completed</code> 先到会让订单「已完成但没创建过」</td></tr><tr><td>直接丢弃迟到的事件</td><td>消息永久丢失，最终状态不完整</td></tr><tr><td><strong>暂存 + 补齐后重放</strong>（本项目）</td><td>既不丢也不硬写，最终状态与按序到达完全一致</td></tr></tbody></table></div>
+<p><code>_drain_buffer()</code> 用 <code>while</code> 循环反复扫描 <code>BUFFERED</code> 记录，直到某一轮没有任何新增。这是必要的：<code>completed → shipped → paid → created</code> 全部乱序到达后，<code>created</code> 补齐会连锁解锁 <code>paid</code>、<code>shipped</code>、<code>completed</code> 三条，一次扫描不够。每条重放都会写状态流水并标记 <code>replayed=True</code>，看板上能直接看到「顺带重放 3 条暂存事件」。</p>
+<p><code>demo_notify --scenario outoforder</code> 的输出就是这套逻辑的实证：前三条都是 <code>BUFFERED</code>，最后一条 <code>created</code> 到达时位图从 <code>0 → 15</code>，通知恰好补齐到 4 条。</p>
+<hr>
+<span class="anchor" id="10-并发与事务"></span>
+<h2 id="sec-10">10. 并发与事务</h2>
+<ul><li><code>consume_one()</code> 整体包在 <code>transaction.atomic()</code> 里，并对 <code>Order</code> 行用 <code>select_for_update()</code> 加行锁，避免两个消费者同时读写同一订单的位图。</li><li>抢占 <code>ProcessedEvent</code> 时再套一层 <code>transaction.atomic()</code> 作为<strong>保存点（savepoint）</strong>：捕获 <code>IntegrityError</code> 只回滚这一小段，外层事务不会变成 broken 状态。</li><li>SQLite 下 <code>select_for_update</code> 是空操作，但唯一索引依然生效，所以正确性不依赖数据库是否支持行锁；换到 MySQL/PostgreSQL 时代码无需改动。</li><li><code>version</code> 字段每次状态前进 +1，是留给后续做<strong>乐观锁（Optimistic Locking：更新时校验版本，版本变了就重试）</strong>的接口。</li></ul>
+<hr>
+<span class="anchor" id="11-验证"></span>
+<h2 id="sec-11">11. 验证</h2>
+<h3>11.1 自动化测试（19 个，全部通过）</h3>
+<div class="table-wrap"><table><thead><tr><th>分组</th><th>覆盖点</th></tr></thead><tbody><tr><td><code>StateMachineTests</code></td><td>前置位计算、乱序识别、完成态拒绝回退、位图字符串</td></tr><tr><td><code>IdempotencyTests</code></td><td>正常流程 4 阶段、同一事件投 4 次只发 1 条通知、倒序到达最终收敛到 <code>01111</code>、状态不回退、完成后不可取消、唯一约束兜底、场景可复现</td></tr><tr><td><code>QueueTests</code></td><td>认领/ACK、重复投递后可再认领、Redis 不可用时回退、注入 FakeRedis 跑通 XADD/XREADGROUP/XACK、Pending 重投被幂等拦下</td></tr><tr><td><code>ConsoleTests</code></td><td>页面渲染、按钮 POST 生效、清空重来、GET 访问写接口返回 405</td></tr></tbody></table></div>
+<pre><code>python manage.py test
+# Ran 19 tests in 0.35s — OK</code></pre>
+<h3>11.2 一键演示</h3>
+<pre><code>python manage.py demo_notify --scenario mixed</code></pre>
+<p>输出摘要（真实运行结果）：生效 9 · 重复拦下 5 · 乱序暂存 3 · 暂存重放 3；三笔订单位图均为 <code>01111</code>、版本 4；对外通知共 12 条（3 订单 × 4 阶段），没有任何一条因重复投递而多发。</p>
+<h3>11.3 视觉验证</h3>
+<p>用 Django 测试客户端渲染真实页面后，以无头 Edge 在 1280px 与 500px 两种宽度截图核对：术语卡、按钮、六格统计、位图表、时间线、通知日志均正常；<code>document.scrollWidth (489) &lt; window.innerWidth (504)</code>，手机端无横向溢出；深浅色主题都可读。</p>
+<hr>
+<span class="anchor" id="12-运行方式与环境变量"></span>
+<h2 id="sec-12">12. 运行方式与环境变量</h2>
+<pre><code>pip install -r requirements.txt
+python manage.py migrate
+python manage.py demo_notify --scenario mixed
+python manage.py runserver
+# 浏览器打开 http://127.0.0.1:8000/</code></pre>
+<div class="table-wrap"><table><thead><tr><th>变量</th><th>默认值</th><th>说明</th></tr></thead><tbody><tr><td><code>NOTIFY_BACKEND</code></td><td><code>db</code></td><td><code>db</code> = 数据库模拟 Stream；<code>redis</code> = 真实 Redis Stream</td></tr><tr><td><code>NOTIFY_REDIS_URL</code></td><td><code>redis://127.0.0.1:6379/0</code></td><td>Redis 连接串</td></tr><tr><td><code>NOTIFY_STREAM_KEY</code></td><td><code>order:events</code></td><td>Stream 键名</td></tr><tr><td><code>NOTIFY_GROUP</code></td><td><code>order-consumer-group</code></td><td>消费组名</td></tr><tr><td><code>NOTIFY_CONSUMER</code></td><td><code>worker-1</code></td><td>消费者名</td></tr><tr><td><code>NOTIFY_SECRET_KEY</code></td><td>演示用固定值</td><td>生产环境必须覆盖</td></tr><tr><td><code>NOTIFY_DEBUG</code></td><td><code>1</code></td><td>设为 <code>0</code> 关闭 DEBUG</td></tr></tbody></table></div>
+<p><code>python manage.py consume_events --loop</code> 可以当作常驻 worker 消费未确认消息；<code>--scenario</code> / <code>--keep</code> 控制演示场景与是否清空历史数据。</p>
+<hr>
+<span class="anchor" id="13-踩坑复盘本轮真实发生"></span>
+<h2 id="sec-13">13. 踩坑复盘（本轮真实发生）</h2>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>现象</th><th>根因</th><th>怎么查</th><th>怎么防</th></tr></thead><tbody><tr><td>1</td><td><code>manage.py check</code> 报 <code>models.E006</code> 字段冲突</td><td><code>OneToOneField(event)</code> 的属性名默认就是 <code>event_id</code>，与显式的字符串字段 <code>event_id</code> 撞名</td><td>系统检查直接指出 <code>ProcessedEvent.event_id clashes with field 'event'</code></td><td>外键改名 <code>source_event</code> 并指定 <code>db_column</code>，业务 ID 保持 <code>event_id</code></td></tr><tr><td>2</td><td>看板「重复拦下」永远显示 0</td><td>幂等闸门拦下重复消息时直接 <code>return</code>，没有任何写库动作</td><td>测试断言 <code>ProcessedEvent.filter(DUPLICATE).count() &gt; 0</code> 失败</td><td>新增 <code>DeliveryAttempt</code> 表记录每次尝试；统计改查这张表；<code>ProcessedEvent.duplicate_hits</code> 累加次数</td></tr><tr><td>3</td><td>暗色主题下按钮文字几乎看不见</td><td><code>.btn</code> 背景硬编码 <code>#fff</code>，暗色下文字变成浅色，白底浅字</td><td>无头 Edge 截图肉眼比对</td><td>背景改用 <code>var(--surface)</code>，主按钮在暗色单独指定深蓝，虚线按钮文字用 <code>var(--ink)</code></td></tr><tr><td>4</td><td>本机没有 Redis / Docker，Redis 路径没法验证</td><td>环境限制，不是代码问题</td><td><code>redis-server</code>、<code>docker</code>、<code>importlib.util.find_spec</code> 逐个探测</td><td>抽象队列接口 + 自动回退；<code>FakeRedis</code> 注入测试覆盖 Stream 命令</td></tr><tr><td>5</td><td>手机端疑似横向溢出</td><td>grid 子项默认 <code>min-width:auto</code>，表格 <code>white-space:nowrap</code> 会撑开列</td><td>注入脚本读 <code>scrollWidth</code> 与 <code>innerWidth</code> 对比（489 &lt; 504）</td><td><code>.card { min-width: 0 }</code>、<code>.table-wrap { max-width: 100% }</code></td></tr></tbody></table></div>
+<hr>
+<span class="anchor" id="14-术语速查表"></span>
+<h2 id="sec-14">14. 术语速查表</h2>
+<div class="table-wrap"><table><thead><tr><th>术语</th><th>白话解释</th></tr></thead><tbody><tr><td>事件 / Event</td><td>一件事发生后发出的一条消息</td></tr><tr><td>幂等 / Idempotency</td><td>同一个操作做 100 次和做 1 次效果一样</td></tr><tr><td>at-least-once</td><td>队列保证「至少送到一次」，所以一定会重复，必须靠消费端幂等</td></tr><tr><td>乱序 / Out-of-order</td><td>先发生的事反而后到</td></tr><tr><td>位图 / Bitmask</td><td>用一个整数的二进制位记多个开关状态</td></tr><tr><td>状态机 / State Machine</td><td>规定状态只能按哪几条路往前走</td></tr><tr><td>消费组 / Consumer Group</td><td>多个消费者分摊同一批消息，各自记录读到哪</td></tr><tr><td>Pending / ACK</td><td>已认领还没确认 / 确认处理完成</td></tr><tr><td>XADD / XREADGROUP / XACK</td><td>Redis Stream 的投递 / 认领 / 确认命令</td></tr><tr><td>ORM</td><td>把 Python 翻成数据库指令的翻译官</td></tr><tr><td>迁移 / Migration</td><td>改了模型之后，把表结构同步到数据库的脚本</td></tr><tr><td>事务 / Transaction</td><td>一组操作要么全成功、要么全撤销</td></tr><tr><td>保存点 / Savepoint</td><td>事务里的小回滚点，局部失败不拖垮整笔事务</td></tr><tr><td><code>select_for_update</code></td><td>给数据库行加锁，防止并发同时改</td></tr><tr><td>乐观锁 / Optimistic Locking</td><td>更新时校验版本号，版本变了就重试</td></tr><tr><td>PRG</td><td>提交后重定向，刷新页面不会重复提交</td></tr><tr><td>CSRF</td><td>表单防伪凭证，确认请求真从本站页面发出</td></tr><tr><td>405 / 404 / 403 / 500</td><td>方式不对 / 找不着路 / 不让进 / 里面出错</td></tr></tbody></table></div>
+<hr>
+<span class="anchor" id="15-后续演进"></span>
+<h2 id="sec-15">15. 后续演进</h2>
+<ol><li>接真实 Redis 集群，<code>XINFO STREAM</code> 监控积压，<code>XAUTOCLAIM</code> 处理长期未 ACK 的消息。</li><li>幂等键从随机 UUID 换成业务语义键（如 <code>order_no:event_type:version</code>），支持上游按业务重试。</li><li><code>state_mask</code> 换成数据库原生位运算 + <code>version</code> 乐观锁，做多线程压测验证吞吐。</li><li>引入死信队列（Dead Letter Queue）：重放超过 N 次仍失败的事件单独隔离告警。</li><li>演示页接 WebSocket，消费结果实时推送，不用刷新页面。</li></ol>
+<hr>
+<span class="anchor" id="附录-a最短的入门切口"></span>
+<h2 id="sec-16">附录 A：最短的入门切口</h2>
+<p>想读懂整个项目，只看一次「重复投递」即可，它把整条链路压缩成几行：</p>
+<pre><code>点击「重复投递」
+  → views.run_scenario_view()            # 视图
+  → consumer.run_scenario(&quot;duplicate&quot;)    # 场景
+  → publish_event(event_id=同一个)       # 事件表 + 队列投递 ×3
+  → consume_one(event_id)               # 幂等闸门
+      第一次 → APPLIED   → _apply_stage() → 位图 0→1 + 1 条通知
+      第二三次 → DUPLICATE → 只写 DeliveryAttempt，不改状态、不发通知
+  → queue.ack()
+  → 看板显示「生效 1 · 重复拦下 2 · 通知 1 条」</code></pre>
+<p>其余所有功能，都是这条链路上换了事件类型、换了队列后端、或加了暂存重放而已。</p>
+<span class="anchor" id="附录-b场景对照"></span>
+<h2 id="sec-17">附录 B：场景对照</h2>
+<div class="table-wrap"><table><thead><tr><th>场景</th><th>投递顺序</th><th>期望结果</th></tr></thead><tbody><tr><td><code>normal</code></td><td>created → paid → shipped → completed</td><td>4 条 APPLIED，位图 <code>01111</code>，4 条通知</td></tr><tr><td><code>duplicate</code></td><td>每个 event_id 投 2 次（首个投 3 次）</td><td>5 条 DUPLICATE，通知仍按阶段各 1 条</td></tr><tr><td><code>outoforder</code></td><td>completed → shipped → paid → created</td><td>前 3 条 BUFFERED，最后 1 条 APPLIED 并重放 3 条，位图 <code>01111</code></td></tr><tr><td><code>mixed</code></td><td>以上三个场景连跑</td><td>生效 9 · 拦下 5 · 暂存 3 · 重放 3 · 通知 12</td></tr></tbody></table></div></article>
+    <article id="doc-blog"><h1>把一条订单通知故意投了三次之后，我终于把「幂等」讲明白了</h1>
+<blockquote>项目：<code>idempotent-order-notify</code> · Django 5.2 · SQLite · 可选 Redis Stream<br>仓库：https://github.com/songxufeng-Seanfin/idempotent-order-notify<br>6 张表 · 约 1,840 行代码 · 19 个自动化测试全部通过</blockquote>
+<p>前阵子把「闲小集」那个校园二手交易平台做完了，功能闭环、文档博客也补齐了。轮到简历上的第二个项目时，我挑了一个听起来最唬人的：<strong>订单通知的幂等消费与乱序处理</strong>。</p>
+<p>一开始我是有点虚的。「幂等」「乱序」「Redis Stream」「位图状态回滚」——每个词单独查都能看懂，凑在一起就像天书。真正把它做出来之后反而发现：这东西的核心其实一句话就能说完，难的从来不是概念，是<strong>把概念变成能跑、能验证、能指着说「你看，它确实没出错」的东西</strong>。</p>
+<p>这篇就记录我怎么把这句人话，一层层变成代码。</p>
+<hr>
+<span class="anchor" id="一先说人话电梯按钮"></span>
+<h2 id="sec-1">一、先说人话：电梯按钮</h2>
+<p>幂等（Idempotency）的白话版：<strong>同一个操作做 100 次，和做 1 次效果一样。</strong></p>
+<p>电梯按钮是最好的比喻。你按一下「8 楼」，灯亮；再按两下，灯还是亮，电梯不会上三层。但如果这是个「下单」按钮、或者一条「订单已支付」的通知，重复两次就可能扣两次钱、发两条短信、加两次积分。</p>
+<p>消息队列为什么会重复？因为主流队列为了保证<strong>不丢消息</strong>，走的是「至少投递一次」（at-least-once）：网络抖一下、消费者处理慢了、确认包丢了，它就再投一次。它不是故意捣乱，是「宁可重复，不可丢失」。所以<strong>重复不是异常，是默认前提</strong>，幂等必须由消费端自己负责。</p>
+<p>乱序（Out-of-order）更好懂：先发生的事反而后到。「发货」通知比「下单」通知先到，收到什么就写什么的话，订单就会出现「已完成但没创建过」这种鬼状态。</p>
+<p>所以这个项目要回答的其实只有一个问题：<strong>当通知又重复又不按顺序来时，怎么保证订单状态是对的、短信只发一条？</strong></p>
+<hr>
+<span class="anchor" id="二第一个念头加个-if-不就行了"></span>
+<h2 id="sec-2">二、第一个念头：加个 <code>if</code> 不就行了？</h2>
+<p>我最初的直觉是：查一下这个事件处理过没有，处理过就跳过。</p>
+<pre><code>if ProcessedEvent.objects.filter(event_id=event_id).exists():
+    return &quot;重复了，跳过&quot;
+# ...真正处理</code></pre>
+<p>这段代码在单线程里跑得好好的，但它是错的。错在<strong>「查」和「写」之间有时间差</strong>：两个消费者同时查到「没有」，然后都往下走，两边都发了通知。这种 bug 平时不出现，一到并发就冒出来，而且很难复现。</p>
+<p>正确的姿势是把判断交给数据库：给 <code>event_id</code> 加<strong>唯一索引（Unique Constraint）</strong>，然后直接抢着插入一条消费记录。谁插进去谁干活，插不进去的会撞上唯一约束冲突，那就是重复消息。</p>
+<pre><code>try:
+    with transaction.atomic():          # 保存点：局部失败不拖垮整笔事务
+        record = ProcessedEvent.objects.create(
+            source_event=event, event_id=event_id, result=&quot;PROCESSING&quot;, ...
+        )
+except IntegrityError:                  # 唯一约束冲突 = 别人已经处理过了
+    return ConsumeResult(event_id, &quot;DUPLICATE&quot;, &quot;重复投递被拦下，通知不会重发&quot;)</code></pre>
+<p>这一下思路就变了：<strong>不去「判断」有没有重复，而是让数据库「仲裁」谁有资格处理</strong>。代码里的 <code>if</code> 只是让提示更友好，唯一索引才是最后的底线。</p>
+<p>我还顺手加了第三道防线：对外通知表 <code>NotificationLog</code> 的 <code>event_id</code> 也是唯一的，用 <code>get_or_create</code> 写。哪怕前面闸门真被绕过，也插不进第二条通知。<strong>正确性不依赖每一层都不犯错，而是靠多层兜底。</strong></p>
+<hr>
+<span class="anchor" id="三乱序比重复麻烦因为丢和写都不对"></span>
+<h2 id="sec-3">三、乱序比重复麻烦，因为「丢」和「写」都不对</h2>
+<p>重复消息可以拦掉，乱序消息不行。</p>
+<p>我在 <code>state_machine.py</code> 里给四个阶段各分了一个二进制位：</p>
+<div class="table-wrap"><table><thead><tr><th>阶段</th><th>位</th><th>值</th></tr></thead><tbody><tr><td>已创建</td><td>第 0 位</td><td>1</td></tr><tr><td>已支付</td><td>第 1 位</td><td>2</td></tr><tr><td>已发货</td><td>第 2 位</td><td>4</td></tr><tr><td>已完成</td><td>第 3 位</td><td>8</td></tr></tbody></table></div>
+<p>一个订单走到「创建 + 支付 + 发货 + 完成」，位图就是 <code>01111</code>（十进制 15）。这个<strong>位图（Bitmask）</strong>最妙的地方是：缺哪一步可以直接算出来。<code>01011</code> 一眼看得出「已发货」没到。</p>
+<p>而且推进状态用的是按位或：</p>
+<pre><code>def next_mask(event_type, mask):
+    return mask | bit_of(event_type)</code></pre>
+<p>或运算只能把 <code>0</code> 变 <code>1</code>，永远不能把 <code>1</code> 变 <code>0</code>。<strong>「状态绝不回退」不是我写了一条规矩，是数学上就做不到。</strong> 这比堆一堆 <code>if</code> 判断舒服太多。</p>
+<p>那「发货」先到怎么办？三条路：</p>
+<ol><li>收到就写 → 状态跳步，错。</li><li>直接丢掉 → 消息永久丢失，订单永远缺一步，错。</li><li><strong>暂存（Buffer）</strong>：先记一条 <code>BUFFERED</code>，不推进也不丢；等前置阶段补齐，再按业务序号重放（Replay）。</li></ol>
+<p>第三条是唯一能收敛到正确终态的做法。我特意做了个「倒序全投」的场景：<code>completed → shipped → paid → created</code> 依次到达。前三条都被暂存，最后一条 <code>created</code> 到达时，位图从 <code>0</code> 一步变成 <code>15</code>——因为 <code>_drain_buffer()</code> 会连锁把另外三条按序补齐。</p>
+<p>这里有个小细节值得记：重放必须<strong>循环扫描直到某一轮没有新增</strong>。一次扫描只能解锁一条，而这里一次要连锁解锁三条。</p>
+<hr>
+<span class="anchor" id="四没有-redis怎么办"></span>
+<h2 id="sec-4">四、没有 Redis，怎么办？</h2>
+<p>简历上写的是「Django + Redis Stream」。但这台机器上既没有 <code>redis-server</code>，也没有 Docker，<code>import redis</code> 都报 <code>No module named 'redis'</code>。</p>
+<p>要是直接写死 Redis，项目就跑不起来，演示、测试、截图全得停摆。我的处理是把队列抽象成四个动作：</p>
+<pre><code>class EventQueue:
+    def publish(self, event_id): ...       # 投递
+    def claim(self, consumer, count): ...  # 认领
+    def ack(self, event_id): ...           # 确认
+    def pending_count(self): ...           # 还有几条没确认</code></pre>
+<p>然后写两个实现：</p>
+<ul><li><code>DatabaseQueue</code>（默认）：用 <code>delivered / claimed_by / claimed_at</code> 三个字段，在一张 SQLite 表里模拟 Stream 的投递-认领-确认。重复投递就把消息重新置为未确认，于是能被再次认领——正好是 at-least-once 的语义。</li><li><code>RedisStreamQueue</code>：<code>XADD</code> 投递、<code>XREADGROUP</code> 认领（先读 Pending 再读新消息 <code>&gt;</code>）、<code>XACK</code> 确认、<code>XPENDING</code> 查积压，一个真实消费组该有的都有。</li></ul>
+<p><code>get_queue()</code> 读环境变量决定用哪个，Redis 连不上就<strong>自动回退</strong>到数据库队列，并在页面上写明原因。于是：本机零依赖能跑、装了 Redis 一行环境变量就能切、业务代码一行不用改。</p>
+<p>为了不让 Redis 那条路径变成「没测过的代码」，我在测试里写了个 <code>FakeRedis</code>：只用几十行实现那六个命令的内存版语义。这样「消费者崩溃没 ACK → 消息重投 → 幂等闸门拦下」这条经典场景，在没有 Redis 的机器上也能被真实断言覆盖。</p>
+<blockquote>事后回看，这个「抽象接口 + 自动回退 + 内存替身」的组合，比 Redis 本身更让我有收获：它把一个环境依赖问题，变成了一个设计问题。</blockquote>
+<hr>
+<span class="anchor" id="五把抽象的东西变成能看见的东西"></span>
+<h2 id="sec-5">五、把抽象的东西变成能看见的东西</h2>
+<p>后端概念最难受的地方是「看不见」。所以我把整个系统做成了一个<strong>演示控制台</strong>：五个按钮，点一下真的跑一遍完整链路。</p>
+<ul><li>正常流程：四个阶段按序到达</li><li>重复投递：同一个 <code>event_id</code> 投三次</li><li>乱序投递：倒序投四个阶段</li><li>一键跑全部场景 / 清空重来</li></ul>
+<p>页面上实时显示：六格统计、订单的位图小方块与进度条、每次消费尝试的时间线（生效 / 重复拦下 / 乱序暂存用不同颜色）、对外通知日志、状态变更流水。三个白话术语卡就摆在顶部——<strong>幂等像电梯按钮、乱序是后发的先到、位图是一个数字记进度</strong>。</p>
+<p>结果第一版就翻车了：「重复拦下」那一格永远显示 <code>0</code>。</p>
+<p>查下来不是逻辑错，是<strong>被拦下的请求压根没写库</strong>——幂等闸门 <code>return</code> 得干脆利落，什么痕迹都没留。测试一断言就露馅了。于是补了第七张…不对，是第六张表 <code>DeliveryAttempt</code>：<code>ProcessedEvent</code> 一个 <code>event_id</code> 只有一条，负责<strong>正确性</strong>；<code>DeliveryAttempt</code> 来几次记几条，负责<strong>可观测性</strong>。</p>
+<p>这件事给我的印象比幂等本身还深：<strong>系统「做对了」和「能证明自己做对了」是两件事</strong>。生产环境里后者往往更值钱。</p>
+<hr>
+<span class="anchor" id="六怎么证明它真的对"></span>
+<h2 id="sec-6">六、怎么证明它真的对</h2>
+<p>我没有靠肉眼点按钮，而是写了 19 个自动化测试（<code>python manage.py test</code>）：</p>
+<ul><li>同一事件投 4 次 → 通知只有 1 条、<code>duplicate_hits == 3</code>、尝试记录 4 条</li><li>四个阶段全倒序 → 最终位图 <code>01111</code>、三条暂存全部重放、通知恰好 4 条</li><li>已完成后再收到旧事件 → 拒绝且位图不变</li><li>完成后想取消 → 拒绝</li><li>唯一约束在并发写入下确实抛 <code>IntegrityError</code></li><li>队列认领/ACK、Redis 不可用回退、FakeRedis 的 Pending 重投被幂等拦下</li><li>页面 GET 200、按钮 POST 302、GET 访问写接口返回 405</li></ul>
+<p>另外 <code>python manage.py demo_notify --scenario mixed</code> 会打印一张真实的事件表。我最喜欢这两行：</p>
+<pre><code>bc64e2bf29484810  APPLIED      0 → 15    按序推进；顺带重放 3 条暂存事件
+...
+对外通知共 12 条（同一 event_id 只会出现一条，重复消费不会重发）</code></pre>
+<p>三笔订单全部收敛到 <code>01111</code>，版本都是 4，通知恰好 12 条（3 单 × 4 阶段）。<strong>重复投递 5 次，一条多余通知都没发出来。</strong> 这比任何解释都有说服力。</p>
+<hr>
+<span class="anchor" id="七还踩了几个小坑"></span>
+<h2 id="sec-7">七、还踩了几个小坑</h2>
+<p>顺手记一下，都是真实发生的：</p>
+<ul><li><strong>字段名撞车</strong>：<code>OneToOneField(event)</code> 在 Django 里自动生成的属性名就是 <code>event_id</code>，我又显式声明了字符串字段 <code>event_id</code>，<code>manage.py check</code> 直接报 <code>models.E006</code>。外键改名 <code>source_event</code> 并指定 <code>db_column</code> 才解决。</li><li><strong>暗色主题白底白字</strong>：按钮背景硬编码了 <code>#fff</code>，系统切到暗色时文字变浅，截图上几乎看不见。改成 CSS 变量 <code>var(--surface)</code> 后深浅色都正常。</li><li><strong>手机端疑似溢出</strong>：表格 <code>white-space: nowrap</code> 会把 grid 列撑开。给 <code>.card</code> 加 <code>min-width: 0</code>，再注入脚本对比 <code>scrollWidth</code> 和 <code>innerWidth</code>（489 &lt; 504）确认没有横向溢出。</li></ul>
+<p>这几个和幂等都没关系，但它们提醒我：<strong>「功能对」和「能用」之间，还隔着一整层细节。</strong></p>
+<hr>
+<span class="anchor" id="八做完之后"></span>
+<h2 id="sec-8">八、做完之后</h2>
+<p>这个项目最出乎我意料的一点是：它比「闲小集」小得多，但<strong>骨架感更强</strong>。闲小集是十几个功能在重复同一套「模板 → 路由 → 视图 → 模型」；这个项目只有一条流水线，却把「为什么这么设计」逼了出来——为什么不能用 <code>if</code>、为什么不能丢乱序消息、为什么唯一索引要放在数据库、为什么需要一张只记尝试的审计表。</p>
+<p>如果说上一个项目让我认识了<strong>流程</strong>，这个让我第一次碰到了<strong>约束</strong>：正确性不是靠写对每一行代码，而是靠把「不许发生的事」交给数据库、交给数学（按位或）、交给事务去保证。</p>
+<p>后面还能往下走不少：接真实 Redis 集群做积压监控、幂等键换成业务语义键、加乐观锁做并发压测、失败多次的事件进死信队列。但就现在这一版，我已经能指着看板说清楚：这条通知投了三次，订单没乱，短信只发了一条，而且每一步都有据可查。</p>
+<p>对「学一个后端概念」这件事来说，我觉得这比读完一篇讲幂等的文章要扎实一点。</p>
+<hr>
+<p><em>配套文档：<code>docs/technical-doc.md</code>（由外向内的分层技术文档）、<code>docs/reader.html</code>（离线阅读版，双 Tab 切换）。</em></p></article>
+  </main>
+</div>
+<div class="foot">订单通知的幂等消费与乱序处理　|　文档随代码存于 docs/ 目录，离线可读</div>
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.tab');
+  var articles = document.querySelectorAll('article');
+  var groups = document.querySelectorAll('.toc-group');
+  function switchTo(name) {
+    tabs.forEach(function (t) { t.classList.toggle('active', t.dataset.doc === name); });
+    articles.forEach(function (a) { a.classList.toggle('active', a.id === 'doc-' + name); });
+    groups.forEach(function (g) { g.classList.toggle('active', g.dataset.group === name); });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try { localStorage.setItem('xj-doc-tab', name); } catch (e) {}
+  }
+  tabs.forEach(function (t) { t.addEventListener('click', function () { switchTo(t.dataset.doc); }); });
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('.toc-link');
+    if (!link) return;
+    e.preventDefault();
+    var target = document.getElementById(link.dataset.target);
+    if (!target) return;
+    var y = target.getBoundingClientRect().top + window.pageYOffset - 84;
+    window.scrollTo({ top: y, behavior: 'smooth' });
+    groups.forEach(function (g) {
+      g.querySelectorAll('.toc-link').forEach(function (l) { l.classList.remove('active'); });
+    });
+    link.classList.add('active');
+  });
+  try {
+    var saved = localStorage.getItem('xj-doc-tab');
+    if (saved === 'blog') { switchTo('blog'); }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
