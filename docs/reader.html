@@ -128,7 +128,7 @@
   <main>
     <article id="doc-tech" class="active"><h1>订单通知的幂等消费与乱序处理 · 技术文档</h1>
 <blockquote>版本：v1.0 · 2026-11-16<br>项目：<code>idempotent-order-notify</code><br>仓库：https://github.com/songxufeng-Seanfin/idempotent-order-notify<br>运行环境：Python 3.13.14 · Django 5.2.19 · SQLite 3 · 可选 Redis Stream<br>代码规模：26 个文件、约 1,840 行（含模板与测试）、6 张业务表、19 个自动化测试</blockquote>
-<p>这份文档按「由外向内」的顺序写：先讲页面上看得见的东西，再讲请求怎么走、Django 怎么调度，最后拆到数据、状态机、并发与队列。每个专业术语第一次出现都配一句白话解释，不需要预先学过消息队列也能读下来。</p>
+<p>这份文档从看板上的按钮写起，再到请求怎么走、Django 怎么调度，最后拆到数据、状态机、并发与队列。没学过消息队列也能读，用到的词都在第一次出现时解释了。</p>
 <hr>
 <span class="anchor" id="1-项目概览"></span>
 <h2 id="sec-1">1. 项目概览</h2>
@@ -374,7 +374,7 @@ except IntegrityError:                  # 唯一约束冲突 = 别人已经处�
 <h2 id="sec-7">七、还踩了几个小坑</h2>
 <p>顺手记一下，都是真实发生的：</p>
 <ul><li><strong>字段名撞车</strong>：<code>OneToOneField(event)</code> 在 Django 里自动生成的属性名就是 <code>event_id</code>，我又显式声明了字符串字段 <code>event_id</code>，<code>manage.py check</code> 直接报 <code>models.E006</code>。外键改名 <code>source_event</code> 并指定 <code>db_column</code> 才解决。</li><li><strong>暗色主题白底白字</strong>：按钮背景硬编码了 <code>#fff</code>，系统切到暗色时文字变浅，截图上几乎看不见。改成 CSS 变量 <code>var(--surface)</code> 后深浅色都正常。</li><li><strong>手机端疑似溢出</strong>：表格 <code>white-space: nowrap</code> 会把 grid 列撑开。给 <code>.card</code> 加 <code>min-width: 0</code>，再注入脚本对比 <code>scrollWidth</code> 和 <code>innerWidth</code>（489 &lt; 504）确认没有横向溢出。</li></ul>
-<p>这几个和幂等都没关系，但它们提醒我：<strong>「功能对」和「能用」之间，还隔着一整层细节。</strong></p>
+<p>这几个和幂等都没关系，但确实提醒了我一件事：「功能对」和「能用」之间还隔着一整层细节。</p>
 <hr>
 <span class="anchor" id="八做完之后"></span>
 <h2 id="sec-8">八、做完之后</h2>
@@ -383,7 +383,7 @@ except IntegrityError:                  # 唯一约束冲突 = 别人已经处�
 <p>后面还能往下走不少：接真实 Redis 集群做积压监控、幂等键换成业务语义键、加乐观锁做并发压测、失败多次的事件进死信队列。但就现在这一版，我已经能指着看板说清楚：这条通知投了三次，订单没乱，短信只发了一条，而且每一步都有据可查。</p>
 <p>对「学一个后端概念」这件事来说，我觉得这比读完一篇讲幂等的文章要扎实一点。</p>
 <hr>
-<p><em>配套文档：<code>docs/technical-doc.md</code>（由外向内的分层技术文档）、<code>docs/reader.html</code>（离线阅读版，双 Tab 切换）。</em></p></article>
+<p><em>配套文档：<code>docs/technical-doc.md</code>、<code>docs/reader.html</code>（离线阅读版，双 Tab 切换）。</em></p></article>
   </main>
 </div>
 <div class="foot">订单通知的幂等消费与乱序处理　|　文档随代码存于 docs/ 目录，离线可读</div>
